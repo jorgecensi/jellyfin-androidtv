@@ -8,16 +8,20 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCompositionContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
@@ -32,6 +36,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.auth.repository.SessionRepository
 import org.jellyfin.androidtv.auth.repository.UserRepository
+import org.jellyfin.androidtv.data.repository.UserViewsRepository
 import org.jellyfin.androidtv.integration.LeanbackChannelWorker
 import org.jellyfin.androidtv.ui.InteractionTrackerViewModel
 import org.jellyfin.androidtv.ui.background.AppBackground
@@ -45,6 +50,7 @@ import org.jellyfin.androidtv.ui.player.video.VideoPlayerFragment
 import org.jellyfin.androidtv.ui.screensaver.InAppScreensaver
 import org.jellyfin.androidtv.ui.settings.compat.MainActivitySettings
 import org.jellyfin.androidtv.ui.shared.sidebar.Sidebar
+import org.jellyfin.androidtv.ui.shared.sidebar.SidebarCollapsedWidth
 import org.jellyfin.androidtv.ui.startup.StartupActivity
 import org.jellyfin.androidtv.util.applyTheme
 import org.koin.android.ext.android.inject
@@ -98,6 +104,7 @@ class MainActivity : FragmentActivity() {
 	private val navigationRepository by inject<NavigationRepository>()
 	private val sessionRepository by inject<SessionRepository>()
 	private val userRepository by inject<UserRepository>()
+	private val userViewsRepository by inject<UserViewsRepository>()
 	private val interactionTrackerViewModel by viewModel<InteractionTrackerViewModel>()
 	private val workManager by inject<WorkManager>()
 
@@ -138,7 +145,22 @@ class MainActivity : FragmentActivity() {
 				) {
 					AppBackground()
 					val isPlaybackScreen = rememberIsPlaybackScreen(navigationRepository)
-					Row(modifier = Modifier.fillMaxSize()) {
+					// Collected at the composition root (not inside Sidebar) because the repository
+					// exposes a cold flow that hits the network per collection, and Sidebar is
+					// unmounted during playback — collecting there refetched the library list and
+					// re-laid-out the rail on every player exit.
+					val userViews by remember { userViewsRepository.views }.collectAsState(initial = emptyList())
+					// The content is inset by the sidebar's fixed collapsed width and the expanded
+					// sidebar overlays it, instead of both sharing a Row. Animating the Row slot
+					// width forced the entire Leanback view hierarchy to re-measure on every frame
+					// of the expand/collapse animation, which TV hardware can't do smoothly.
+					Box(modifier = Modifier.fillMaxSize()) {
+						AppNavigationHost(
+							modifier = Modifier
+								.fillMaxSize()
+								.padding(start = if (isPlaybackScreen) 0.dp else SidebarCollapsedWidth),
+							navigationRepository = navigationRepository,
+						)
 						if (!isPlaybackScreen) {
 							val parentCompositionContext = rememberCompositionContext()
 							AndroidView(
@@ -147,17 +169,16 @@ class MainActivity : FragmentActivity() {
 									ComposeView(context).apply {
 										setParentCompositionContext(parentCompositionContext)
 										setContent {
-											Sidebar(onFocusChanged = { sidebarHasFocus = it })
+											Sidebar(
+												views = userViews,
+												onFocusChanged = { sidebarHasFocus = it },
+											)
 										}
 										sidebarView = this
 									}
 								},
 							)
 						}
-						AppNavigationHost(
-							modifier = Modifier.weight(1f),
-							navigationRepository = navigationRepository,
-						)
 					}
 					InAppScreensaver()
 					MainActivitySettings()

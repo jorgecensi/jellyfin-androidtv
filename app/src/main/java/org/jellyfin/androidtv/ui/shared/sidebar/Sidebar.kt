@@ -44,7 +44,6 @@ import kotlinx.coroutines.withContext
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.auth.repository.SessionRepository
 import org.jellyfin.androidtv.auth.repository.UserRepository
-import org.jellyfin.androidtv.data.repository.UserViewsRepository
 import org.jellyfin.androidtv.ui.base.Icon
 import org.jellyfin.androidtv.ui.base.JellyfinTheme
 import org.jellyfin.androidtv.ui.base.ProfilePicture
@@ -65,13 +64,16 @@ import org.jellyfin.androidtv.util.apiclient.primaryImage
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.tvShowsApi
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.CollectionType
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinActivityViewModel
 
-private val SidebarCollapsedWidth = 72.dp
+/** Width of the collapsed icon rail; content is inset by exactly this amount. */
+val SidebarCollapsedWidth = 72.dp
+
 private val SidebarExpandedWidth = 240.dp
 
 /**
@@ -82,10 +84,12 @@ private val SidebarExpandedWidth = 240.dp
  * part of it has D-pad focus.
  */
 @Composable
-fun Sidebar(onFocusChanged: (Boolean) -> Unit = {}) {
+fun Sidebar(
+	views: Collection<BaseItemDto>,
+	onFocusChanged: (Boolean) -> Unit = {},
+) {
 	val navigationRepository = koinInject<NavigationRepository>()
 	val itemLauncher = koinInject<ItemLauncher>()
-	val userViewsRepository = koinInject<UserViewsRepository>()
 	val userRepository = koinInject<UserRepository>()
 	val api = koinInject<ApiClient>()
 	val mediaManager = koinInject<MediaManager>()
@@ -95,7 +99,6 @@ fun Sidebar(onFocusChanged: (Boolean) -> Unit = {}) {
 	val activity = LocalActivity.current
 	val coroutineScope = rememberCoroutineScope()
 
-	val views by remember { userViewsRepository.views }.collectAsState(initial = emptyList())
 	val currentUser by remember { userRepository.currentUser.filterNotNull() }.collectAsState(null)
 	val userImage = remember(currentUser) { currentUser?.primaryImage?.getUrl(api) }
 

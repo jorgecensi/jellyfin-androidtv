@@ -84,6 +84,23 @@ android {
 
 			buildConfigField("boolean", "DEVELOPMENT", (defaultConfig.versionCode!! < 100).toString())
 		}
+
+		// Release-grade build that still installs locally without a release keystore: inherits R8
+		// minification/shrinking and the non-debuggable runtime from `release` (debuggable builds
+		// lose significant ART optimization, which is very noticeable on TV hardware), but keeps
+		// the debug application id and signing key so it installs alongside the official app.
+		create("optimized") {
+			initWith(getByName("release"))
+			applicationIdSuffix = ".debug"
+			signingConfig = signingConfigs.getByName("debug")
+			matchingFallbacks += "release"
+
+			resValue("string", "app_id", namespace + applicationIdSuffix)
+			resValue("string", "app_search_suggest_authority", "${namespace + applicationIdSuffix}.content")
+			resValue("string", "app_search_suggest_intent_data", "content://${namespace + applicationIdSuffix}.content/intent")
+
+			resValue("string", "app_name", "@string/app_name_debug")
+		}
 	}
 
 	lint {
