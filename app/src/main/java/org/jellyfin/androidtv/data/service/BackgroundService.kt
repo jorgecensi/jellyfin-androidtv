@@ -38,6 +38,12 @@ class BackgroundService(
 	companion object {
 		val SLIDESHOW_DURATION = 30.seconds
 		val TRANSITION_DURATION = 800.milliseconds
+
+		/**
+		 * Delay before actually loading a requested backdrop, so scrubbing focus across many
+		 * items only loads the backdrop of the item the user settles on.
+		 */
+		val LOAD_DEBOUNCE = 300.milliseconds
 	}
 
 	// Async
@@ -48,6 +54,7 @@ class BackgroundService(
 
 	// Current background data
 	private var _backgrounds = emptyList<ImageBitmap>()
+	private var loadedBackdropUrls = emptySet<String>()
 	private var _currentIndex = 0
 	private var _currentBackground = MutableStateFlow<ImageBitmap?>(null)
 	private var _blurBackground = MutableStateFlow(false)
@@ -69,9 +76,12 @@ class BackgroundService(
 		// Enable blur for backdrops
 		_blurBackground.value = backdropBehavior == BackdropBehavior.BACKDROP_WITH_BLUR
 
-		// Get all backdrop urls
+		// Get all backdrop urls, sized to the display - the originals can be 4K, which wastes
+		// decode time, memory and GPU bandwidth (especially with the blur variant) for a
+		// dimmed background layer
+		val metrics = context.resources.displayMetrics
 		val backdropUrls = (baseItem.itemBackdropImages + baseItem.parentBackdropImages)
-			.map { it.getUrl(api) }
+			.map { it.getUrl(api, maxWidth = metrics.widthPixels, maxHeight = metrics.heightPixels) }
 			.toSet()
 
 		loadBackgrounds(backdropUrls)
@@ -105,14 +115,21 @@ class BackgroundService(
 		// Re-enable backgrounds if disabled
 		_enabled.value = true
 
+		// Skip reloading when the currently shown backdrops are the same set, like when moving
+		// through an episode row where every item shares the parent's backdrops
+		if (backdropUrls == loadedBackdropUrls) return
+
 		// Cancel current loading job
 		loadBackgroundsJob?.cancel()
 		loadBackgroundsJob = scope.launch(Dispatchers.IO) {
+			delay(LOAD_DEBOUNCE)
+
 			_backgrounds = backdropUrls.mapNotNull { url ->
 				imageLoader.execute(
 					request = ImageRequest.Builder(context).data(url).build()
 				).image?.toBitmap()?.asImageBitmap()
 			}
+			loadedBackdropUrls = backdropUrls
 
 			// Go to first background
 			_currentIndex = 0
@@ -122,6 +139,7 @@ class BackgroundService(
 
 	fun clearBackgrounds() {
 		loadBackgroundsJob?.cancel()
+		loadedBackdropUrls = emptySet()
 
 		// Re-enable backgrounds if disabled
 		_enabled.value = true
