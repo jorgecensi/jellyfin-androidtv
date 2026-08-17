@@ -14,11 +14,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCompositionContext
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
@@ -43,6 +45,8 @@ import org.jellyfin.androidtv.ui.background.AppBackground
 import org.jellyfin.androidtv.ui.base.JellyfinTheme
 import org.jellyfin.androidtv.ui.base.ProvideLocalInteractionTracker
 import org.jellyfin.androidtv.ui.composable.compat.AppNavigationHost
+import org.jellyfin.androidtv.ui.home.HomeFragment
+import org.jellyfin.androidtv.ui.home.hero.HomeHeroViewModel
 import org.jellyfin.androidtv.ui.navigation.NavigationAction
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
 import org.jellyfin.androidtv.ui.playback.CustomPlaybackOverlayFragment
@@ -72,12 +76,13 @@ private val PlaybackFragmentClasses: Set<KClass<out Fragment>> = setOf(
 private const val SidebarLeftEscapeThresholdDp = 152
 
 /**
- * Tracks the currently visible [Destination.Fragment] by mirroring [NavigationRepository]'s
- * push/replace/clear/back-navigation behavior, so the sidebar can hide itself while a video
- * player fragment is on screen.
+ * Tracks the currently visible [Destination.Fragment]'s class by mirroring [NavigationRepository]'s
+ * push/replace/clear/back-navigation behavior. Used to derive both whether the sidebar should hide
+ * itself (a video player fragment is on screen) and whether the home screen's content should skip
+ * the usual sidebar-width inset (see isHomeScreen below).
  */
 @Composable
-private fun rememberIsPlaybackScreen(navigationRepository: NavigationRepository): Boolean {
+private fun rememberCurrentFragmentClass(navigationRepository: NavigationRepository): KClass<out Fragment>? {
 	val screenStack = remember { mutableStateListOf<KClass<out Fragment>>() }
 
 	LaunchedEffect(navigationRepository) {
@@ -97,7 +102,7 @@ private fun rememberIsPlaybackScreen(navigationRepository: NavigationRepository)
 		}
 	}
 
-	return screenStack.lastOrNull() in PlaybackFragmentClasses
+	return screenStack.lastOrNull()
 }
 
 class MainActivity : FragmentActivity() {
@@ -106,11 +111,18 @@ class MainActivity : FragmentActivity() {
 	private val userRepository by inject<UserRepository>()
 	private val userViewsRepository by inject<UserViewsRepository>()
 	private val interactionTrackerViewModel by viewModel<InteractionTrackerViewModel>()
+	// Same activity-scoped instance HomeFragment and HomeRowsFragment already share - see
+	// HomeHeroViewModel.focusRequests for why dispatchKeyEvent needs it.
+	private val homeHeroViewModel by viewModel<HomeHeroViewModel>()
 	private val workManager by inject<WorkManager>()
 
 	// Updated synchronously by Sidebar's onFocusChanged callback (not Compose state) so
 	// dispatchKeyEvent can read a reliably up-to-date value within the same key event.
 	private var sidebarHasFocus = false
+
+	// Mirrors the Compose-local isHomeScreen via SideEffect (see setContent) so dispatchKeyEvent,
+	// a plain Activity method outside the composition, can read it synchronously.
+	private var isHomeScreenActive = false
 
 	// A distinct native View boundary around Sidebar (rather than a plain composable sharing
 	// MainActivity's own AndroidComposeView) so dispatchKeyEvent can synchronously exclude it
@@ -144,7 +156,20 @@ class MainActivity : FragmentActivity() {
 					interactionTracker = { interactionTrackerViewModel.notifyInteraction(false, userInitiated = true) }
 				) {
 					AppBackground()
-					val isPlaybackScreen = rememberIsPlaybackScreen(navigationRepository)
+					val currentFragmentClass = rememberCurrentFragmentClass(navigationRepository)
+					val isPlaybackScreen = currentFragmentClass in PlaybackFragmentClasses
+					// Home renders its own hero art full-bleed behind the sidebar instead of being
+					// inset by it - every other screen keeps the inset since their content isn't
+					// drawn to expect the rail on top of it.
+					//
+					// rememberUpdatedState because Sidebar is mounted once inside AndroidView's
+					// factory (see below) and stays mounted across ordinary navigation - only a
+					// plain State read inside that already-created composition, like this one or
+					// userViews below, keeps reflecting the current screen as the user moves between
+					// Home and everything else; a captured plain val would freeze at whatever screen
+					// was active the first time the sidebar was created.
+					val isHomeScreen by rememberUpdatedState(currentFragmentClass == HomeFragment::class)
+					SideEffect { isHomeScreenActive = isHomeScreen }
 					// Collected at the composition root (not inside Sidebar) because the repository
 					// exposes a cold flow that hits the network per collection, and Sidebar is
 					// unmounted during playback — collecting there refetched the library list and
@@ -158,7 +183,7 @@ class MainActivity : FragmentActivity() {
 						AppNavigationHost(
 							modifier = Modifier
 								.fillMaxSize()
-								.padding(start = if (isPlaybackScreen) 0.dp else SidebarCollapsedWidth),
+								.padding(start = if (isPlaybackScreen || isHomeScreen) 0.dp else SidebarCollapsedWidth),
 							navigationRepository = navigationRepository,
 						)
 						if (!isPlaybackScreen) {
@@ -232,8 +257,24 @@ class MainActivity : FragmentActivity() {
 	 * row. Reverting focus after the fact isn't enough because it also throws away whatever
 	 * legitimate move Leanback made as part of that same search; instead we exclude the sidebar
 	 * from the search entirely (via descendantFocusability, which the platform's FocusFinder
-	 * respects) unless we're already at the content's left edge, letting the search naturally
-	 * fall back to the correct card within the row.
+	 * respects) unless we're already at the content's left edge.
+	 *
+	 * At the left edge we request focus on the sidebar directly rather than letting the search
+	 * find it on its own. On Home, whose content deliberately shares the sidebar's own left edge
+	 * so the hero's backdrop can bleed under the rail (see Sidebar's overlay param), the focused
+	 * view's rect and the sidebar's rect now start at the identical x - and the platform
+	 * FocusFinder requires a candidate's edge to be *beyond* the source's in the requested
+	 * direction, so two views tied on that edge can't be ordered and the search silently finds
+	 * nothing. An explicit request sidesteps that geometry entirely, and behaves identically to
+	 * the old search-based handoff on every screen where the search still worked fine.
+	 *
+	 * The return trip (Right, sidebar back to content) has the identical problem on Home and needs
+	 * the identical treatment, but can't be solved the same way: there's no single correct View to
+	 * request focus on, since it depends on whether the hero or the rows was actually active, and
+	 * that state is private to HomeFragment's own composition. HomeHeroViewModel.focusRequests is
+	 * the bridge - see there for why. Gated on isHomeScreenActive because that bridge only reaches
+	 * HomeFragment; consuming Right unconditionally would silently break the return trip on every
+	 * other screen, where the platform search already lands correctly on its own.
 	 */
 	override fun dispatchKeyEvent(event: KeyEvent): Boolean {
 		if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && !sidebarHasFocus) {
@@ -243,13 +284,18 @@ class MainActivity : FragmentActivity() {
 			val thresholdPx = SidebarLeftEscapeThresholdDp * resources.displayMetrics.density
 			val wasAtLeftEdge = focusedBefore == null || rect.left <= thresholdPx
 
-			if (!wasAtLeftEdge) sidebarView?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+			if (wasAtLeftEdge) return sidebarView?.requestFocus() ?: super.dispatchKeyEvent(event)
 
+			sidebarView?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
 			val consumed = super.dispatchKeyEvent(event)
-
 			sidebarView?.descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
 
 			return consumed
+		}
+
+		if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && sidebarHasFocus && isHomeScreenActive) {
+			homeHeroViewModel.requestContentFocus()
+			return true
 		}
 
 		return super.dispatchKeyEvent(event)

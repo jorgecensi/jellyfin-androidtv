@@ -31,6 +31,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -44,8 +45,8 @@ import kotlinx.coroutines.withContext
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.auth.repository.SessionRepository
 import org.jellyfin.androidtv.auth.repository.UserRepository
+import org.jellyfin.androidtv.ui.base.AccentColor
 import org.jellyfin.androidtv.ui.base.Icon
-import org.jellyfin.androidtv.ui.base.JellyfinTheme
 import org.jellyfin.androidtv.ui.base.ProfilePicture
 import org.jellyfin.androidtv.ui.base.Text
 import org.jellyfin.androidtv.ui.base.button.ButtonBase
@@ -82,6 +83,12 @@ private val SidebarExpandedWidth = 240.dp
  * today (Home, Search, Settings, user switch) plus a direct link per user library. Collapses to
  * an icon-only rail once focus leaves it, and expands to show labels for every item while any
  * part of it has D-pad focus.
+ *
+ * Rendered as a Netflix-style overlay rather than an opaque panel: instead of a solid fill, the
+ * rail is backed by a gradient running black at the screen edge to fully transparent at its own
+ * right edge, so it grounds the icons without cutting a hard band across whatever sits beneath -
+ * the home screen's hero art directly, and [org.jellyfin.androidtv.ui.background.AppBackground]'s
+ * persistent backdrop on every other screen, whose content stays inset clear of the rail as before.
  */
 @Composable
 fun Sidebar(
@@ -110,7 +117,14 @@ fun Sidebar(
 		modifier = Modifier
 			.fillMaxHeight()
 			.width(width)
-			.background(JellyfinTheme.colorScheme.surface)
+			// Spans the rail's own width, so it stretches with the expand animation and never
+			// darkens content beyond the rail itself.
+			.background(
+				Brush.horizontalGradient(
+					0f to Color.Black.copy(alpha = 0.9f),
+					1f to Color.Transparent,
+				)
+			)
 			.focusRestorer(focusRequester)
 			.onFocusChanged {
 				expanded = it.hasFocus
@@ -226,6 +240,9 @@ private fun SidebarButton(
 		colors = ButtonDefaults.colors(
 			containerColor = Color.Transparent,
 			disabledContainerColor = Color.Transparent,
+			// The app-wide focus color is overridden here specifically - see AccentColor.
+			focusedContainerColor = AccentColor,
+			focusedContentColor = Color.White,
 		),
 		modifier = modifier
 			.fillMaxWidth()

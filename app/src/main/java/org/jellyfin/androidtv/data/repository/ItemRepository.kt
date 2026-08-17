@@ -34,4 +34,18 @@ object ItemRepository {
 		ItemFields.OVERVIEW,
 		ItemFields.PRIMARY_IMAGE_ASPECT_RATIO,
 	)
+
+	// Field set for the home screen hero banner. Deliberately not browseFields, which omits the
+	// taglines the banner shows, and deliberately not itemFields, whose media sources, streams,
+	// chapters and trickplay data are pure waste for a banner that never plays in place. PEOPLE is
+	// included so the director can be shown; community/critic/official rating and production year
+	// need no field flag - they are returned unconditionally.
+	val featuredFields = setOf(
+		ItemFields.DATE_CREATED,
+		ItemFields.GENRES,
+		ItemFields.OVERVIEW,
+		ItemFields.PEOPLE,
+		ItemFields.PRIMARY_IMAGE_ASPECT_RATIO,
+		ItemFields.TAGLINES,
+	)
 }

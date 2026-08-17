@@ -170,6 +170,11 @@ class UserPreferences(context: Context) : SharedPreferenceStore(
 		var seriesThumbnailsEnabled = booleanPreference("pref_enable_series_thumbnails", true)
 
 		/**
+		 * Show a large featured banner for recently added, unwatched items above the home screen rows
+		 */
+		var homeHeroEnabled = booleanPreference("pref_home_hero_enabled", true)
+
+		/**
 		 * Subtitles foreground color
 		 */
 		var subtitlesBackgroundColor = longPreference("subtitles_background_color", 0x00FFFFFF)

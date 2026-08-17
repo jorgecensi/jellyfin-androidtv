@@ -20,6 +20,8 @@ import org.jellyfin.androidtv.data.model.DataRefreshService
 import org.jellyfin.androidtv.data.repository.CustomMessageRepository
 import org.jellyfin.androidtv.data.repository.CustomMessageRepositoryImpl
 import org.jellyfin.androidtv.data.repository.ExternalAppRepository
+import org.jellyfin.androidtv.data.repository.HomeFeaturedRepository
+import org.jellyfin.androidtv.data.repository.HomeFeaturedRepositoryImpl
 import org.jellyfin.androidtv.data.repository.ItemMutationRepository
 import org.jellyfin.androidtv.data.repository.ItemMutationRepositoryImpl
 import org.jellyfin.androidtv.data.repository.NotificationsRepository
@@ -46,6 +48,7 @@ import org.jellyfin.androidtv.ui.playback.segment.MediaSegmentRepositoryImpl
 import org.jellyfin.androidtv.ui.playback.stillwatching.StillWatchingViewModel
 import org.jellyfin.androidtv.ui.player.photo.PhotoPlayerViewModel
 import org.jellyfin.androidtv.ui.search.SearchFragmentDelegate
+import org.jellyfin.androidtv.ui.home.hero.HomeHeroViewModel
 import org.jellyfin.androidtv.ui.search.SearchRepository
 import org.jellyfin.androidtv.ui.search.SearchRepositoryImpl
 import org.jellyfin.androidtv.ui.search.SearchViewModel
@@ -147,6 +150,7 @@ val appModule = module {
 	single<CustomMessageRepository> { CustomMessageRepositoryImpl() }
 	single<NavigationRepository> { NavigationRepositoryImpl(Destinations.home) }
 	single<SearchRepository> { SearchRepositoryImpl(get()) }
+	single<HomeFeaturedRepository> { HomeFeaturedRepositoryImpl(get()) }
 	single<MediaSegmentRepository> { MediaSegmentRepositoryImpl(get(), get()) }
 	single<ExternalAppRepository> { ExternalAppRepository(get(), getAll(), get<DefaultExternalPlayerApi>()) }
 
@@ -164,6 +168,7 @@ val appModule = module {
 	viewModel { StillWatchingViewModel(get(), get(), get(), get()) }
 	viewModel { PhotoPlayerViewModel(get()) }
 	viewModel { SearchViewModel(get()) }
+	viewModel { HomeHeroViewModel(get()) }
 	viewModel { DreamViewModel(get(), get(), get(), get(), get()) }
 	viewModel { SettingsViewModel() }
 

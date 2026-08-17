@@ -38,6 +38,7 @@ import org.jellyfin.androidtv.preference.UserSettingPreferences
 import org.jellyfin.androidtv.ui.GridButton
 import org.jellyfin.androidtv.ui.browsing.CompositeClickedListener
 import org.jellyfin.androidtv.ui.browsing.CompositeSelectedListener
+import org.jellyfin.androidtv.ui.home.hero.HomeHeroViewModel
 import org.jellyfin.androidtv.ui.itemhandling.BaseRowItem
 import org.jellyfin.androidtv.ui.itemhandling.ItemLauncher
 import org.jellyfin.androidtv.ui.itemhandling.ItemRowAdapter
@@ -56,6 +57,7 @@ import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.model.api.LibraryChangedMessage
 import org.jellyfin.sdk.model.api.UserDataChangedMessage
 import org.koin.android.ext.android.inject
+import org.koin.androidx.viewmodel.ext.android.activityViewModel
 import timber.log.Timber
 import kotlin.time.Duration.Companion.seconds
 
@@ -73,6 +75,7 @@ class HomeRowsFragment : RowsSupportFragment(), AudioEventListener, View.OnKeyLi
 	private val navigationRepository by inject<NavigationRepository>()
 	private val itemLauncher by inject<ItemLauncher>()
 	private val keyProcessor by inject<KeyProcessor>()
+	private val homeHeroViewModel by activityViewModel<HomeHeroViewModel>()
 
 	private val helper by lazy { HomeFragmentHelper(requireContext(), userRepository) }
 
@@ -161,6 +164,17 @@ class HomeRowsFragment : RowsSupportFragment(), AudioEventListener, View.OnKeyLi
 					CustomMessage.RefreshCurrentItem -> refreshCurrentItem()
 					else -> Unit
 				}
+			}.launchIn(lifecycleScope)
+
+		// The hero banner paints its own crisp, untinted backdrop while expanded, so row selection
+		// must not also drive the global one or a second, different item shows through behind it.
+		// Gated here rather than cleared once by the banner because the rows' initial automatic
+		// selection fires a second or two after the banner appears and would win that race.
+		homeHeroViewModel.expanded
+			.flowWithLifecycle(lifecycle, Lifecycle.State.RESUMED)
+			.onEach { heroExpanded ->
+				if (heroExpanded) backgroundService.clearBackgrounds()
+				else backgroundService.setBackground(currentItem?.baseItem)
 			}.launchIn(lifecycleScope)
 
 		lifecycleScope.launch {
@@ -281,7 +295,7 @@ class HomeRowsFragment : RowsSupportFragment(), AudioEventListener, View.OnKeyLi
 				val itemRowAdapter = row.adapter as? ItemRowAdapter
 				itemRowAdapter?.loadMoreItemsIfNeeded(itemRowAdapter.indexOf(item))
 
-				backgroundService.setBackground(item.baseItem)
+				if (!homeHeroViewModel.expanded.value) backgroundService.setBackground(item.baseItem)
 			}
 		}
 	}
