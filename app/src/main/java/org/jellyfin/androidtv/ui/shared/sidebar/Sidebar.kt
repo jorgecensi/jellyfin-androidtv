@@ -10,13 +10,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,6 +58,7 @@ import org.jellyfin.androidtv.ui.itemhandling.ItemLauncher
 import org.jellyfin.androidtv.ui.navigation.ActivityDestinations
 import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
+import org.jellyfin.androidtv.ui.navigation.NavigationSound
 import org.jellyfin.androidtv.ui.playback.MediaManager
 import org.jellyfin.androidtv.ui.settings.compat.SettingsViewModel
 import org.jellyfin.androidtv.util.PlaybackHelper
@@ -161,16 +163,25 @@ fun Sidebar(
 			},
 		)
 
-		for (view in views) {
-			SidebarButton(
-				icon = view.collectionType.sidebarIcon(),
-				label = view.name.orEmpty(),
-				expanded = expanded,
-				onClick = { itemLauncher.launchUserView(view) },
-			)
+		// Library views can outnumber the space left between the fixed top and bottom buttons -
+		// scrolling just this section (instead of relying on the old weighted Spacer to eat the
+		// slack) keeps Settings and the user switcher reachable, and visible, no matter how many
+		// libraries the server has, instead of them being pushed off the bottom of the rail.
+		Column(
+			modifier = Modifier
+				.weight(1f)
+				.verticalScroll(rememberScrollState()),
+			verticalArrangement = Arrangement.spacedBy(8.dp),
+		) {
+			for (view in views) {
+				SidebarButton(
+					icon = view.collectionType.sidebarIcon(),
+					label = view.name.orEmpty(),
+					expanded = expanded,
+					onClick = { itemLauncher.launchUserView(view) },
+				)
+			}
 		}
-
-		Spacer(modifier = Modifier.weight(1f))
 
 		SidebarButton(
 			icon = R.drawable.ic_settings,
@@ -232,6 +243,7 @@ private fun SidebarButton(
 	leadingIcon: @Composable () -> Unit,
 ) {
 	val interactionSource = remember { MutableInteractionSource() }
+	val navigationSound = koinInject<NavigationSound>()
 
 	ButtonBase(
 		onClick = onClick,
@@ -246,7 +258,10 @@ private fun SidebarButton(
 		),
 		modifier = modifier
 			.fillMaxWidth()
-			.focusScale(interactionSource),
+			.focusScale(interactionSource)
+			// Moving between buttons stays inside the sidebar's own ComposeView, invisible to
+			// MainActivity's View-level focus listener
+			.onFocusChanged { if (it.isFocused) navigationSound.notifyMoved() },
 	) {
 		Row(
 			modifier = Modifier.padding(IconButtonDefaults.ContentPadding),

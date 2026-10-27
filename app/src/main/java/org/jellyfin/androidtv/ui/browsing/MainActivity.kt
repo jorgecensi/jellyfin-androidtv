@@ -49,6 +49,7 @@ import org.jellyfin.androidtv.ui.home.HomeFragment
 import org.jellyfin.androidtv.ui.home.hero.HomeHeroViewModel
 import org.jellyfin.androidtv.ui.navigation.NavigationAction
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
+import org.jellyfin.androidtv.ui.navigation.NavigationSound
 import org.jellyfin.androidtv.ui.playback.CustomPlaybackOverlayFragment
 import org.jellyfin.androidtv.ui.player.video.VideoPlayerFragment
 import org.jellyfin.androidtv.ui.screensaver.InAppScreensaver
@@ -115,6 +116,7 @@ class MainActivity : FragmentActivity() {
 	// HomeHeroViewModel.focusRequests for why dispatchKeyEvent needs it.
 	private val homeHeroViewModel by viewModel<HomeHeroViewModel>()
 	private val workManager by inject<WorkManager>()
+	private val navigationSound by inject<NavigationSound>()
 
 	// Updated synchronously by Sidebar's onFocusChanged callback (not Compose state) so
 	// dispatchKeyEvent can read a reliably up-to-date value within the same key event.
@@ -143,6 +145,10 @@ class MainActivity : FragmentActivity() {
 			}.launchIn(lifecycleScope)
 
 		if (savedInstanceState == null && navigationRepository.canGoBack) navigationRepository.reset(clearHistory = true)
+
+		// Catches every View-level focus move, including into and out of the sidebar and between the
+		// Leanback cards; moves inside a single Compose hierarchy notify NavigationSound themselves.
+		window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { _, _ -> navigationSound.notifyMoved() }
 
 		navigationRepository.currentAction
 			.flowWithLifecycle(lifecycle, Lifecycle.State.STARTED)
@@ -276,15 +282,18 @@ class MainActivity : FragmentActivity() {
 	 * HomeFragment; consuming Right unconditionally would silently break the return trip on every
 	 * other screen, where the platform search already lands correctly on its own.
 	 */
-	override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+	private fun dispatchFocusKeyEvent(event: KeyEvent): Boolean {
 		if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && !sidebarHasFocus) {
 			val focusedBefore = currentFocus
 			val rect = Rect()
 			focusedBefore?.getGlobalVisibleRect(rect)
 			val thresholdPx = SidebarLeftEscapeThresholdDp * resources.displayMetrics.density
 			val wasAtLeftEdge = focusedBefore == null || rect.left <= thresholdPx
+			// The hero card starts inside the threshold, but Left on it pages back through the
+			// carousel until the first slide - it is only truly at the left edge from there.
+			val heroCanPageLeft = isHomeScreenActive && homeHeroViewModel.expanded.value && homeHeroViewModel.selectedIndex.value > 0
 
-			if (wasAtLeftEdge) return sidebarView?.requestFocus() ?: super.dispatchKeyEvent(event)
+			if (wasAtLeftEdge && !heroCanPageLeft) return sidebarView?.requestFocus() ?: super.dispatchKeyEvent(event)
 
 			sidebarView?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
 			val consumed = super.dispatchKeyEvent(event)
@@ -299,6 +308,16 @@ class MainActivity : FragmentActivity() {
 		}
 
 		return super.dispatchKeyEvent(event)
+	}
+
+	override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+		// Armed before dispatching, not after: focus changes inside the dispatch itself (e.g. between
+		// Leanback cards) notify NavigationSound synchronously, before the result is known.
+		val isNavigation = event.action == KeyEvent.ACTION_DOWN && navigationSound.arm(event.keyCode)
+		val consumed = dispatchFocusKeyEvent(event)
+		// Unconsumed presses fall through to the platform's own focus navigation, which clicks itself
+		if (isNavigation && !consumed) navigationSound.disarm()
+		return consumed
 	}
 
 	// Forward key events to fragments

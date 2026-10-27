@@ -116,11 +116,12 @@ class BackgroundService(
 		_enabled.value = true
 
 		// Skip reloading when the currently shown backdrops are the same set, like when moving
-		// through an episode row where every item shares the parent's backdrops
+		// through an episode row where every item shares the parent's backdrops. Any pending load is
+		// still cancelled first: moving A -> B -> A within the debounce window would otherwise let B's
+		// still-queued load land after the user is already back on A.
+		loadBackgroundsJob?.cancel()
 		if (backdropUrls == loadedBackdropUrls) return
 
-		// Cancel current loading job
-		loadBackgroundsJob?.cancel()
 		loadBackgroundsJob = scope.launch(Dispatchers.IO) {
 			delay(LOAD_DEBOUNCE)
 

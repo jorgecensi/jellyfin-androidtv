@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.data.repository.HomeFeaturedRepository
+import org.jellyfin.androidtv.preference.UserPreferences
 import org.jellyfin.sdk.model.api.BaseItemDto
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -38,6 +39,7 @@ sealed interface HomeHeroState {
  */
 class HomeHeroViewModel(
 	private val homeFeaturedRepository: HomeFeaturedRepository,
+	private val userPreferences: UserPreferences,
 ) : ViewModel() {
 	private companion object {
 		val STALE_AFTER = 5.minutes
@@ -106,6 +108,14 @@ class HomeHeroViewModel(
 
 	private fun load() {
 		loadJob?.cancel()
+		// Skips the network entirely when the banner is turned off - otherwise every launch pays for
+		// two featured queries competing with the home rows for bandwidth, only to be discarded.
+		// loadedAtMillis stays unset so re-enabling it in settings loads on the next resume.
+		if (!userPreferences[UserPreferences.homeHeroEnabled]) {
+			_state.value = HomeHeroState.Hidden
+			return
+		}
+
 		loadJob = viewModelScope.launch {
 			val items = homeFeaturedRepository.getFeaturedItems()
 			loadedAtMillis = System.currentTimeMillis()

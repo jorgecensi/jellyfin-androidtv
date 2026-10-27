@@ -7,11 +7,14 @@ import android.view.ViewGroup
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -90,6 +93,30 @@ class HomeFragment : Fragment() {
 		// global backdrop based on a stale value.
 		LaunchedEffect(heroExpanded, heroVisible) { heroViewModel.setExpanded(heroExpanded && heroVisible) }
 
+		// Invisible, pure-Compose focus target claimed immediately, before the featured query has
+		// any chance to resolve - this is what keeps the sidebar collapsed on cold start. Leaving
+		// nothing focused in HomeFragment's own tree during that gap let Android's platform-level
+		// "auto-focus the first eligible view" default win the race and land on the sidebar instead
+		// (visible as it popping open, expanded, right as the app launches).
+		//
+		// Deliberately not the rows: claiming the rows (a wrapped native Leanback View) first and
+		// then stealing focus back to the hero moments later broke the hero's own focus border -
+		// keyboard input still correctly reached it, but Compose's focus-change notifications don't
+		// reliably fire when focus moves off a native View back onto a plain Compose node. This
+		// placeholder is pure Compose on both ends of every handoff below, so it never crosses that
+		// boundary at all.
+		//
+		// Only focusable until the hero or rows actually take focus. Left focusable after that, it
+		// sits geometrically above the banner, so D-pad Up from the hero moved focus onto this
+		// invisible node and the user lost track of focus entirely. Not tied to initialFocusApplied
+		// below: that flips a frame before the deferred hero request lands, and disabling the
+		// placeholder in that gap would recreate the exact empty-focus race it exists to prevent.
+		val placeholderFocusRequester = remember { FocusRequester() }
+		var placeholderFocusable by remember { mutableStateOf(true) }
+		LaunchedEffect(Unit) {
+			placeholderFocusRequester.requestFocus()
+		}
+
 		// Decided once the featured query has actually answered. Acting while it is still Loading
 		// would focus the rows and leave the banner unreachable for the rest of the session; the
 		// user navigating down in the meantime must also win over a late-arriving banner.
@@ -99,7 +126,13 @@ class HomeFragment : Fragment() {
 
 			if (heroVisible) {
 				heroExpanded = true
-				heroFocusRequester.requestFocus()
+				// Not a direct heroFocusRequester.requestFocus() call: heroVisible just flipped
+				// true in this same effect, and HomeHero (below, gated on heroVisible) may not have
+				// finished composing and attaching its FocusRequester yet in this pass. Bouncing
+				// through requestHeroFocus - the same mechanism onExit below already uses to escape
+				// its own re-entrant-focus-transaction problem - defers the request to a later
+				// recomposition where the node reliably exists.
+				requestHeroFocus = true
 			} else {
 				rowsFocusRequester.requestFocus()
 			}
@@ -151,6 +184,16 @@ class HomeFragment : Fragment() {
 		val expandedHeight = LocalConfiguration.current.screenHeightDp.dp * HomeHeroExpandedHeightFraction
 
 		Box(modifier = Modifier.fillMaxSize()) {
+			// See placeholderFocusRequester above for why this exists. 0dp and non-drawing: it must
+			// still be a real, measured layout node for focusRequester()/focusable() to attach to,
+			// but has nothing to show and is never meant to be visible even for a single frame.
+			Spacer(
+				modifier = Modifier
+					.size(0.dp)
+					.focusRequester(placeholderFocusRequester)
+					.focusable(enabled = placeholderFocusable)
+			)
+
 			val collapseProgress by animateFloatAsState(
 				targetValue = if (heroExpanded && heroVisible) 0f else 1f,
 				animationSpec = tween(durationMillis = HomeHeroCollapseDurationMs, easing = FastOutSlowInEasing),
@@ -180,7 +223,12 @@ class HomeFragment : Fragment() {
 					}
 					.focusGroup()
 					.focusRequester(rowsFocusRequester)
-					.onFocusChanged { if (it.hasFocus) heroExpanded = false }
+					.onFocusChanged {
+						if (it.hasFocus) {
+							heroExpanded = false
+							placeholderFocusable = false
+						}
+					}
 					.focusProperties {
 						onExit = {
 							val isFirstRowSelected = rowsSupportFragment?.selectedPosition?.let { it <= 0 } ?: false
@@ -206,7 +254,12 @@ class HomeFragment : Fragment() {
 					height = expandedHeight,
 					onNext = heroViewModel::next,
 					onSelectIndex = heroViewModel::select,
-					onFocusChanged = { hasFocus -> if (hasFocus) heroExpanded = true },
+					onFocusChanged = { hasFocus ->
+						if (hasFocus) {
+							heroExpanded = true
+							placeholderFocusable = false
+						}
+					},
 					focusRequester = heroFocusRequester,
 					downFocusRequester = rowsFocusRequester,
 					modifier = Modifier

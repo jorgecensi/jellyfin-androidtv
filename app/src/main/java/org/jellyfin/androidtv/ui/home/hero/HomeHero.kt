@@ -8,7 +8,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,6 +59,7 @@ import org.jellyfin.androidtv.ui.composable.AsyncImage
 import org.jellyfin.androidtv.ui.composable.modifier.overscanPaddingValues
 import org.jellyfin.androidtv.ui.navigation.Destinations
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
+import org.jellyfin.androidtv.ui.navigation.NavigationSound
 import org.jellyfin.androidtv.ui.shared.sidebar.SidebarCollapsedWidth
 import org.jellyfin.androidtv.ui.shared.toolbar.ToolbarClock
 import org.jellyfin.androidtv.util.apiclient.getUrl
@@ -112,16 +113,18 @@ fun HomeHero(
 	focusRequester: FocusRequester? = null,
 	downFocusRequester: FocusRequester? = null,
 ) {
-	timber.log.Timber.d("DBG HomeHero recompose: items.size=${items.size} selectedIndex=$selectedIndex expanded=$expanded")
-	val item = items.getOrNull(selectedIndex) ?: run {
-		timber.log.Timber.d("DBG HomeHero EARLY RETURN: item was null for selectedIndex=$selectedIndex items.size=${items.size}")
-		return
-	}
+	val item = items.getOrNull(selectedIndex) ?: return
 	val api = koinInject<ApiClient>()
 	val navigationRepository = koinInject<NavigationRepository>()
+	val navigationSound = koinInject<NavigationSound>()
 
 	val interactionSource = remember { MutableInteractionSource() }
-	val focused by interactionSource.collectIsFocusedAsState()
+	// Driven directly by onFocusChanged below rather than interactionSource.collectIsFocusedAsState():
+	// clickable()'s own interaction source doesn't reliably emit a focus interaction when focus is
+	// handed to this card programmatically (HomeFragment's initial-focus and hand-off-from-sidebar
+	// requestFocus() calls) rather than gained through natural D-pad traversal - onFocusChanged is the
+	// lower-level, more direct Compose API and reports both cases correctly.
+	var focused by remember { mutableStateOf(false) }
 	val borderColor by animateColorAsState(if (focused) AccentColor else Color.Transparent, label = "heroFocusBorder")
 
 	// Bumped on every key press so the rotation effect below restarts its delay. This is the whole
@@ -157,20 +160,28 @@ fun HomeHero(
 			// focusable/clickable target, or requestFocus() silently no-ops and initial focus falls
 			// through to whatever the platform defaults to next - observed as focus landing on the
 			// sidebar instead of the hero on cold start when this was ordered the other way around.
-			.focusProperties { down = downFocusRequester ?: FocusRequester.Default }
+			// Nothing focusable sits above the banner. Left to the default search, Up escapes the
+			// Compose tree and the platform picks an arbitrary view (typically the sidebar).
+			.focusProperties {
+				up = FocusRequester.Cancel
+				down = downFocusRequester ?: FocusRequester.Default
+			}
 			.then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
 			.onFocusChanged {
-				timber.log.Timber.d("DBG HomeHero onFocusChanged: hasFocus=${it.hasFocus} isFocused=${it.isFocused}")
+				focused = it.hasFocus
 				onFocusChanged(it.hasFocus)
 			}
 			.onKeyEvent { event ->
 				if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-				timber.log.Timber.d("DBG HomeHero onKeyEvent: key=${event.key} selectedIndex=$selectedIndex items.size=${items.size}")
 				lastInteraction = System.currentTimeMillis()
 
 				when (event.key) {
 					Key.DirectionRight -> {
-						if (selectedIndex < items.lastIndex) onSelectIndex(selectedIndex + 1)
+						if (selectedIndex < items.lastIndex) {
+							onSelectIndex(selectedIndex + 1)
+							// Paging doesn't move focus, so nothing else would click for it
+							navigationSound.notifyMoved()
+						}
 						// Consumed either way - there is nothing to the right of the hero to hand off to.
 						true
 					}
@@ -178,11 +189,11 @@ fun HomeHero(
 					Key.DirectionLeft -> {
 						if (selectedIndex > 0) {
 							onSelectIndex(selectedIndex - 1)
+							navigationSound.notifyMoved()
 							true
 						} else {
 							// Not consumed: lets MainActivity's sidebar escape guard take over, exactly
 							// like the old leftmost Play button did.
-							timber.log.Timber.d("DBG HomeHero: Left at index 0, not consuming")
 							false
 						}
 					}
