@@ -61,6 +61,7 @@ import org.jellyfin.androidtv.util.applyTheme
 import org.koin.android.ext.android.inject
 import org.koin.androidx.viewmodel.ext.android.viewModel
 import timber.log.Timber
+import java.lang.ref.WeakReference
 import kotlin.reflect.KClass
 
 private val PlaybackFragmentClasses: Set<KClass<out Fragment>> = setOf(
@@ -127,9 +128,13 @@ class MainActivity : FragmentActivity() {
 	private var isHomeScreenActive = false
 
 	// A distinct native View boundary around Sidebar (rather than a plain composable sharing
-	// MainActivity's own AndroidComposeView) so dispatchKeyEvent can synchronously exclude it
-	// from a single D-pad Left focus search via descendantFocusability — see dispatchKeyEvent.
+	// MainActivity's own AndroidComposeView) so its focusability can be controlled synchronously
+	// via descendantFocusability - see focusSidebar.
 	private var sidebarView: ComposeView? = null
+
+	// What had focus when focusSidebar moved into the sidebar, so Right can return to it. Weak
+	// because it usually belongs to a fragment that navigation may destroy meanwhile.
+	private var focusBeforeSidebar: WeakReference<View>? = null
 
 	override fun onCreate(savedInstanceState: Bundle?) {
 		applyTheme()
@@ -199,10 +204,15 @@ class MainActivity : FragmentActivity() {
 								factory = { context ->
 									ComposeView(context).apply {
 										setParentCompositionContext(parentCompositionContext)
+										// Unfocusable until focusSidebar opens it - see there
+										descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
 										setContent {
 											Sidebar(
 												views = userViews,
-												onFocusChanged = { sidebarHasFocus = it },
+												onFocusChanged = { hasFocus ->
+													sidebarHasFocus = hasFocus
+													if (!hasFocus) descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+												},
 											)
 										}
 										sidebarView = this
@@ -257,13 +267,12 @@ class MainActivity : FragmentActivity() {
 	}
 
 	/**
-	 * Android's default D-pad focus search treats the sidebar as a valid candidate for Left
-	 * presses from anywhere in a Leanback row, not just its first column — the sidebar spans the
-	 * full screen height, so it geometrically out-competes the actual previous card in the same
-	 * row. Reverting focus after the fact isn't enough because it also throws away whatever
-	 * legitimate move Leanback made as part of that same search; instead we exclude the sidebar
-	 * from the search entirely (via descendantFocusability, which the platform's FocusFinder
-	 * respects) unless we're already at the content's left edge.
+	 * The sidebar is only focusable while the user is in it, and the only way in is D-pad Left from
+	 * the content's left edge, which [focusSidebar] handles explicitly.
+	 *
+	 * Left anywhere else can't reach it: Android's default D-pad focus search treats the
+	 * full-height sidebar as a valid candidate for Left presses from anywhere in a Leanback row,
+	 * and it geometrically out-competes the actual previous card in the same row.
 	 *
 	 * At the left edge we request focus on the sidebar directly rather than letting the search
 	 * find it on its own. On Home, whose content deliberately shares the sidebar's own left edge
@@ -293,21 +302,44 @@ class MainActivity : FragmentActivity() {
 			// carousel until the first slide - it is only truly at the left edge from there.
 			val heroCanPageLeft = isHomeScreenActive && homeHeroViewModel.expanded.value && homeHeroViewModel.selectedIndex.value > 0
 
-			if (wasAtLeftEdge && !heroCanPageLeft) return sidebarView?.requestFocus() ?: super.dispatchKeyEvent(event)
-
-			sidebarView?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-			val consumed = super.dispatchKeyEvent(event)
-			sidebarView?.descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
-
-			return consumed
+			if (wasAtLeftEdge && !heroCanPageLeft) return focusSidebar(focusedBefore) ?: super.dispatchKeyEvent(event)
 		}
 
-		if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && sidebarHasFocus && isHomeScreenActive) {
-			homeHeroViewModel.requestContentFocus()
-			return true
+		if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && sidebarHasFocus) {
+			if (isHomeScreenActive) {
+				homeHeroViewModel.requestContentFocus()
+				return true
+			}
+
+			// Elsewhere the platform search can't be trusted either: the expanded sidebar overlaps
+			// the content's first columns, so "nearest to the right" lands on whatever clears it -
+			// on a library grid, the toolbar's Home button in the top-right corner. Falls back to
+			// that search only when the original view is gone, e.g. after navigating from the sidebar.
+			val previous = focusBeforeSidebar?.get()
+			if (previous != null && previous.isAttachedToWindow && previous.isShown && previous.requestFocus()) return true
 		}
 
 		return super.dispatchKeyEvent(event)
+	}
+
+	/**
+	 * Opens the sidebar to focus and moves focus into it. Kept blocked the rest of the time
+	 * (re-blocked as soon as it loses focus) because whenever the focused view disappears - e.g.
+	 * Back from a details screen replacing the fragment that held it - Android hands focus to the
+	 * first focusable view it finds, which was the sidebar: it popped open over the screen the
+	 * user had just returned to instead of focus landing back in the content.
+	 *
+	 * Returns null when the sidebar isn't shown (playback screens), so the key reaches the content.
+	 * sidebarView itself outlives the sidebar there, detached, and requesting focus on it would
+	 * swallow Left in the player.
+	 */
+	private fun focusSidebar(focusedBefore: View?): Boolean? {
+		val sidebar = sidebarView?.takeIf { it.isAttachedToWindow } ?: return null
+		sidebar.descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+		val focused = sidebar.requestFocus()
+		if (focused) focusBeforeSidebar = focusedBefore?.let(::WeakReference)
+		else sidebar.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+		return focused
 	}
 
 	override fun dispatchKeyEvent(event: KeyEvent): Boolean {
