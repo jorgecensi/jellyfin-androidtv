@@ -418,7 +418,11 @@ public class FullDetailsFragment extends Fragment implements RecordingIndicatorV
 
             mDetailsOverviewRow = new MyDetailsOverviewRow(item);
 
-            String primaryImageUrl = imageHelper.getValue().getLogoImageUrl(mBaseItem, 600);
+            // Movies show their poster, other items prefer the logo
+            String primaryImageUrl = null;
+            if (item.getType() != BaseItemKind.MOVIE) {
+                primaryImageUrl = imageHelper.getValue().getLogoImageUrl(mBaseItem, 600);
+            }
             if (primaryImageUrl == null) {
                 primaryImageUrl = imageHelper.getValue().getPrimaryImageUrl(mBaseItem, false, null, posterHeight);
             }
