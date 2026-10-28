@@ -4,7 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
@@ -79,6 +80,12 @@ val SidebarCollapsedWidth = 72.dp
 
 private val SidebarExpandedWidth = 240.dp
 
+// Right-edge darkness of the expanded sidebar's gradient; the screen edge is 0.9
+private const val SidebarExpandedEdgeAlpha = 0.75f
+
+// How far past the rail's edge its gradient fades out to transparent
+private val SidebarFadeTail = 48.dp
+
 /**
  * Persistent icon rail shown alongside the current screen, replacing per-screen top navigation.
  * Houses the same destinations [org.jellyfin.androidtv.ui.shared.toolbar.MainToolbar] exposes
@@ -114,19 +121,32 @@ fun Sidebar(
 	val focusRequester = remember { FocusRequester() }
 	var expanded by remember { mutableStateOf(false) }
 	val width by animateDpAsState(if (expanded) SidebarExpandedWidth else SidebarCollapsedWidth, label = "sidebarWidth")
+	// The collapsed rail fades out fully so it barely touches the content beneath it, but expanded,
+	// the labels reach into that faded end and clashed with whatever text was behind them - so the
+	// far edge darkens with the expansion, turning it into a near-solid panel.
+	val edgeAlpha by animateFloatAsState(if (expanded) SidebarExpandedEdgeAlpha else 0f, label = "sidebarEdgeAlpha")
 
 	Column(
 		modifier = Modifier
 			.fillMaxHeight()
-			.width(width)
-			// Spans the rail's own width, so it stretches with the expand animation and never
-			// darkens content beyond the rail itself.
-			.background(
-				Brush.horizontalGradient(
-					0f to Color.Black.copy(alpha = 0.9f),
-					1f to Color.Transparent,
+			// Measured SidebarFadeTail wider than the rail and padded straight back below, so the
+			// gradient can fade out past the rail's edge instead of ending in a hard line over the
+			// content, while the buttons and focus area keep the rail's exact width. Collapsed, the
+			// edge is already transparent and the tail draws nothing.
+			.width(width + SidebarFadeTail)
+			// Stretches with the expand animation. drawBehind keeps the animated alpha read in the
+			// draw phase, so it doesn't recompose the rail every frame.
+			.drawBehind {
+				val edge = (size.width - SidebarFadeTail.toPx()) / size.width
+				drawRect(
+					Brush.horizontalGradient(
+						0f to Color.Black.copy(alpha = 0.9f),
+						edge to Color.Black.copy(alpha = edgeAlpha),
+						1f to Color.Transparent,
+					)
 				)
-			)
+			}
+			.padding(end = SidebarFadeTail)
 			.focusRestorer(focusRequester)
 			.onFocusChanged {
 				expanded = it.hasFocus
